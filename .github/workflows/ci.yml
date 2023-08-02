@@ -1,0 +1,105 @@
+name: Test
+
+env:
+  PLUGIN_NAME: ${{ github.event.repository.name }}
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: ${{ matrix.redmine.repo }}:${{ matrix.redmine.version }}-ruby:${{ matrix.redmine.ruby_version }}
+    runs-on: ubuntu-22.04
+    container:
+      image: ruby:${{ matrix.redmine.ruby_version }}-slim
+    strategy:
+      fail-fast: false
+      matrix:
+        redmine: [
+          { repo: redmine, version: 5.0.5, ruby_version: 3.1.4 },
+          { repo: redmine, version: 5.0.5, ruby_version: 2.5.9 },
+          { repo: redmine, version: 4.2.10, ruby_version: 2.7.8 },
+          { repo: redmine, version: 4.2.10, ruby_version: 2.4.10 },
+          { repo: redmine, version: 3.4.13, ruby_version: 2.4.10 },
+          { repo: redmine, version: 3.4.13, ruby_version: 2.3.8 },
+        ]
+    steps:
+      - name: Update Packages
+        run: |
+          if [ ${{ matrix.redmine.ruby_version }} = 2.3.8 ]; then
+            sed -i -e 's/deb.debian.org/archive.debian.org/g' \
+              -e 's/security.debian.org/archive.debian.org/g' \
+              -e '/stretch-updates/d' /etc/apt/sources.list
+          fi
+          apt update
+          apt install -y build-essential libsqlite3-dev imagemagick libmagickwand-dev
+      - name: Checkout Redmine
+        uses: actions/checkout@v3
+        with:
+          repository: ${{ matrix.redmine.repo }}/${{ matrix.redmine.repo }}
+          ref: ${{ matrix.redmine.version }}
+          path: redmine
+
+      - name: Install Ruby dependencies
+        working-directory: redmine
+        run: |
+          cat <<EOF > config/database.yml
+              test:
+                adapter: sqlite3
+                database: db/redmine.sqlite3
+          EOF
+          if [ ${{ matrix.redmine.ruby_version }} = 2.3.8 ] || [ ${{ matrix.redmine.ruby_version }} = 2.4.10 ]; then
+            sed -i -e "/^gem \"nokogiri\"/i gem 'loofah', '~>2.19.1'" Gemfile
+            sed -i -e "/^gem 'nokogiri'/i gem 'loofah', '~>2.19.1'" Gemfile
+          fi
+          bundle config set --local without 'development'
+          bundle install --jobs=4 --retry=3
+
+      - name: Setup DB
+        env:
+          RAILS_ENV: test
+        working-directory: redmine
+        run: |
+          rake generate_secret_token
+          rake db:create db:migrate
+
+      - name: Checkout Plugin
+        uses: actions/checkout@v3
+        with:
+          path: redmine/plugins/${{ env.PLUGIN_NAME }}
+
+      - name: Setup Plugin
+        env:
+          RAILS_ENV: test
+        working-directory: redmine
+        run: bundle install
+
+      - name: Zeitwerk check
+        env:
+          RAILS_ENV: test
+        working-directory: redmine
+        run: |
+          if grep -q zeitwerk config/application.rb ; then
+            rake zeitwerk:check
+          fi
+        shell: bash
+
+      - name: Plugin install test
+        env:
+          RAILS_ENV: test
+        working-directory: redmine
+        run: |
+          rake redmine:plugins:migrate
+
+    #   - name: Run plugin tests
+    #     env:
+    #       RAILS_ENV: test
+    #     working-directory: redmine
+    #     run:  rake redmine:plugins:test NAME=${{ env.PLUGIN_NAME }} RUBYOPT="-W0"
+
+      - name: Plugin uninstall test
+        env:
+          RAILS_ENV: test
+        working-directory: redmine
+        run: rake redmine:plugins:migrate NAME=${{ env.PLUGIN_NAME }} VERSION=0
