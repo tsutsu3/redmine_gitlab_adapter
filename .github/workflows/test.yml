@@ -53,6 +53,7 @@ jobs:
             sed -i -e "/^gem \"nokogiri\"/i gem 'loofah', '~>2.19.1'" Gemfile
             sed -i -e "/^gem 'nokogiri'/i gem 'loofah', '~>2.19.1'" Gemfile
           fi
+          bundle config set --local without 'development'
           bundle install
 
       - name: Setup DB
@@ -69,10 +70,14 @@ jobs:
           path: redmine/plugins/${{ env.PLUGIN_NAME }}
 
       - name: Setup Plugin
+        env:
+          RAILS_ENV: test
         working-directory: redmine
         run: bundle install
 
       - name: Zeitwerk check
+        env:
+          RAILS_ENV: test
         working-directory: redmine
         run: |
           if grep -q zeitwerk config/application.rb ; then
@@ -81,10 +86,20 @@ jobs:
         shell: bash
 
       - name: Plugin install test
+        env:
+          RAILS_ENV: test
         working-directory: redmine
         run: |
           rake redmine:plugins:migrate
 
+    #   - name: Run plugin tests
+    #     env:
+    #       RAILS_ENV: test
+    #     working-directory: redmine
+    #     run:  rake redmine:plugins:test NAME=${{ env.PLUGIN_NAME }} RUBYOPT="-W0"
+
       - name: Plugin uninstall test
+        env:
+          RAILS_ENV: test
         working-directory: redmine
         run: rake redmine:plugins:migrate NAME=${{ env.PLUGIN_NAME }} VERSION=0
